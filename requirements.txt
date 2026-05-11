@@ -1,10 +1,4 @@
-# Core (required for Cowork-native daily flow):
+# Pure-Cowork architecture: HTTP fetching + RSS parsing + PDF rendering.
 httpx>=0.27.0
 feedparser>=6.0.11
-sentence-transformers>=3.0.0
-numpy>=1.26.0
-
-# Optional — only needed for the legacy API path (agent.py + run.py).
-# Comment out if you only use the Cowork scheduled task.
-anthropic>=0.40.0
-
+fpdf2>=2.7.0

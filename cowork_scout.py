@@ -1,68 +1,54 @@
-"""CLI helper for Cowork-driven research scans.
+"""CLI helper for Cowork-driven research scans (pure-Cowork architecture).
 
-Cowork (or any LLM with shell access) calls this script to orchestrate a scan
-without needing the Anthropic SDK / API key. Each subcommand returns JSON to
-stdout so the model can parse, evaluate, and decide what to save.
+Storage is a single `findings.jsonl` in the project folder — no SQLite, no
+embeddings. Every subcommand returns one JSON object on stdout for easy parsing.
 
-Usage:
-    python cowork_scout.py search arxiv          "regime detection" --days 14 --max 20
-    python cowork_scout.py search github         "vol forecasting"      --max 15
-    python cowork_scout.py search reddit         algotrading           --timeframe week
-    python cowork_scout.py search quantocracy
-    python cowork_scout.py search hn             "options"             --days 30
-    python cowork_scout.py search nber                                 --days 30
-    python cowork_scout.py search paperswithcode "transformer trading"
-    python cowork_scout.py search semanticscholar "dispersion trading" --year-from 2024
-    python cowork_scout.py search ssrn           "factor investing"
-    python cowork_scout.py fetch  "https://..."  --max-chars 12000
-
-    # Save a finding (JSON on stdin):
-    echo '{"url":"...","source":"arxiv","title":"...","summary":"...","edge_type":"model","relevance":0.8,"replicability":4,"key_insight":"..."}' \
-        | python cowork_scout.py save
-
-    # Optional: log a session digest at end of run.
-    python cowork_scout.py log-session "daily scan 2026-05-11" --saved 3 --digest-file digest.txt
+Subcommands:
+    search <source> ...        — query one of 9 sources
+    fetch <url>                — readable extraction from any URL
+    save                       — JSON on stdin -> append to findings.jsonl
+    export                     — dump all findings/clusters/authors as JSON
+    generate-pdf               — render today's findings + digest as a PDF report
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Force UTF-8 on stdout so Windows cp1252 doesn't choke on Unicode (e.g. the
-# 'minus sign' character U+2212 that shows up in academic paper titles).
+# UTF-8 stdout on Windows so paper titles with Unicode (em-dashes, minus signs) survive.
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-# Make imports work no matter where the script is invoked from.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 
-from tools import (
+from tools import (  # noqa: E402
     search_arxiv, search_github, fetch_reddit, fetch_quantocracy, fetch_hn,
     fetch_nber, search_paperswithcode, search_semanticscholar, search_ssrn,
     fetch_url,
 )
-from storage import (
-    init_db, already_seen, mark_seen, save_finding,
-    find_or_create_cluster, log_session, export_all,
-    nearest_neighbors, known_authors_for,
-)
-from embeddings import embed, canonical_text
+from findings_store import append_finding, export_all, iter_findings  # noqa: E402
 
+DEFAULT_STORE = str(HERE / "findings.jsonl")
+DEFAULT_REPORTS_DIR = str(HERE / "reports")
 
-DEFAULT_DB = str(Path(__file__).resolve().parent / "research.db")
+REQUIRED_SAVE_FIELDS = {
+    "url", "source", "title", "summary", "edge_type",
+    "relevance", "replicability", "key_insight",
+}
 
 
 def _emit(obj) -> None:
-    """Write JSON to stdout. Always single-line for easy parsing."""
-    sys.stdout.write(json.dumps(obj, default=str, ensure_ascii=False))
-    sys.stdout.write("\n")
+    sys.stdout.write(json.dumps(obj, default=str, ensure_ascii=False) + "\n")
 
 
-def cmd_search(args: argparse.Namespace) -> int:
+def cmd_search(args):
     src = args.source
     try:
         if src == "arxiv":
@@ -91,11 +77,15 @@ def cmd_search(args: argparse.Namespace) -> int:
     except Exception as e:
         _emit({"error": str(e), "source": src})
         return 1
-    _emit({"source": src, "count": len(data) if isinstance(data, list) else 0, "results": data})
+    _emit({
+        "source": src,
+        "count": len(data) if isinstance(data, list) else 0,
+        "results": data,
+    })
     return 0
 
 
-def cmd_fetch(args: argparse.Namespace) -> int:
+def cmd_fetch(args):
     try:
         result = fetch_url(args.url, max_chars=args.max_chars)
     except Exception as e:
@@ -105,7 +95,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_save(args: argparse.Namespace) -> int:
+def cmd_save(args):
     raw = sys.stdin.read().strip()
     if not raw:
         _emit({"error": "save expects a JSON finding on stdin"})
@@ -116,129 +106,97 @@ def cmd_save(args: argparse.Namespace) -> int:
         _emit({"error": f"invalid JSON: {e}"})
         return 2
 
-    required = {"url", "source", "title", "summary", "edge_type", "relevance",
-                "replicability", "key_insight"}
-    missing = required - set(data.keys())
+    missing = REQUIRED_SAVE_FIELDS - set(data.keys())
     if missing:
         _emit({"error": f"missing required fields: {sorted(missing)}"})
         return 2
 
-    conn = init_db(args.db)
-    try:
-        if already_seen(conn, data["url"]):
-            _emit({"status": "duplicate_url", "url": data["url"]})
-            return 0
-
-        text = canonical_text(data["title"], data["summary"], data["key_insight"])
-        emb = embed(text)
-        cluster = find_or_create_cluster(conn, emb, threshold=args.threshold)
-
-        save_finding(conn, embedding=emb, cluster_id=cluster["cluster_id"], **data)
-        mark_seen(conn, data["url"])
-
-        # Cross-reference: top-3 most-similar prior findings outside this cluster.
-        related = nearest_neighbors(
-            conn, emb, k=3, exclude_cluster_id=cluster["cluster_id"],
-        )
-        # Author signal: which authors of this paper appear in prior high-rel findings.
-        known = known_authors_for(conn, data.get("authors", ""))
-
-        _emit({
-            "status": "saved",
-            "url": data["url"],
-            "cluster_id": cluster["cluster_id"],
-            "cluster_size": cluster["cluster_size"],
-            "cluster_sources": cluster["cluster_sources"],
-            "near_duplicate": cluster["near_duplicate"],
-            "max_similarity": cluster["max_similarity"],
-            "existing_titles_in_cluster": cluster["cluster_titles"],
-            "related": related,
-            "known_authors": known,
-        })
-    finally:
-        conn.close()
+    result = append_finding(args.store, data)
+    _emit(result)
     return 0
 
 
-def cmd_export(args: argparse.Namespace) -> int:
-    """Dump everything in research.db needed by the dashboard artifact."""
-    conn = init_db(args.db)
-    try:
-        data = export_all(conn)
-    finally:
-        conn.close()
-    # Add a generation timestamp so the dashboard can show "last refreshed".
-    from datetime import datetime, timezone
-    data["generated_at"] = datetime.now(timezone.utc).isoformat()
+def cmd_export(args):
+    data = export_all(args.store)
     _emit(data)
     return 0
 
 
-def cmd_log_session(args: argparse.Namespace) -> int:
+def cmd_generate_pdf(args):
+    """Render today's findings + the provided digest as a PDF."""
+    from pdf_report import render_pdf  # local import: heavy fpdf2 only when needed
+    from datetime import date
+
+    scan_date = args.date or date.today().isoformat()
+
+    # Filter findings by saved_at date prefix (defaults to today).
+    findings = [
+        f for f in iter_findings(args.store)
+        if (f.get("saved_at") or "").startswith(scan_date)
+    ]
+
+    # Digest from --digest, --digest-file, or both empty.
     digest = ""
     if args.digest_file:
         digest = Path(args.digest_file).read_text(encoding="utf-8")
     elif args.digest:
         digest = args.digest
-    conn = init_db(args.db)
-    try:
-        sid = log_session(conn, args.goal, args.saved, digest)
-    finally:
-        conn.close()
-    _emit({"session_id": sid, "saved": args.saved})
+
+    if not findings and not digest:
+        _emit({"error": f"no findings for {scan_date} and no digest provided"})
+        return 5
+
+    # Default --out: reports/<scan_date>.pdf
+    out_path = args.out or str(Path(DEFAULT_REPORTS_DIR) / f"{scan_date}.pdf")
+    written = render_pdf(findings, digest, out_path, scan_date=scan_date)
+    _emit({
+        "status": "ok",
+        "out": written,
+        "findings_included": len(findings),
+        "scan_date": scan_date,
+        "had_digest": bool(digest),
+    })
     return 0
 
 
-def main() -> int:
+def main():
     ap = argparse.ArgumentParser(description="Cowork-driven research scout CLI")
-    ap.add_argument("--db", default=DEFAULT_DB,
-                    help=f"SQLite path (default: {DEFAULT_DB})")
+    ap.add_argument("--store", default=DEFAULT_STORE,
+                    help=f"Path to findings.jsonl (default: {DEFAULT_STORE})")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    # search
     p_search = sub.add_parser("search", help="Query a source")
-    p_search.add_argument(
-        "source",
-        choices=["arxiv", "github", "reddit", "quantocracy", "hn",
-                 "nber", "paperswithcode", "semanticscholar", "ssrn"],
-    )
-    p_search.add_argument("query", nargs="?", default="",
-                          help="Search keywords (not used for quantocracy/nber)")
-    p_search.add_argument("--max", type=int, default=20, help="Max results")
-    p_search.add_argument("--days", type=int, default=14,
-                          help="Lookback window in days (arxiv, hn, nber)")
+    p_search.add_argument("source", choices=[
+        "arxiv", "github", "reddit", "quantocracy", "hn",
+        "nber", "paperswithcode", "semanticscholar", "ssrn",
+    ])
+    p_search.add_argument("query", nargs="?", default="")
+    p_search.add_argument("--max", type=int, default=20)
+    p_search.add_argument("--days", type=int, default=14)
     p_search.add_argument("--timeframe", default="week",
-                          choices=["hour", "day", "week", "month", "year", "all"],
-                          help="Reddit timeframe")
-    p_search.add_argument("--sort", default="updated",
-                          choices=["updated", "stars"], help="GitHub sort")
-    p_search.add_argument("--year-from", type=int,
-                          help="Minimum publication year (semanticscholar)")
+                          choices=["hour", "day", "week", "month", "year", "all"])
+    p_search.add_argument("--sort", default="updated", choices=["updated", "stars"])
+    p_search.add_argument("--year-from", type=int)
     p_search.set_defaults(func=cmd_search)
 
-    # fetch
-    p_fetch = sub.add_parser("fetch", help="Fetch and extract readable text from a URL")
+    p_fetch = sub.add_parser("fetch", help="Extract readable text from a URL")
     p_fetch.add_argument("url")
     p_fetch.add_argument("--max-chars", type=int, default=12000)
     p_fetch.set_defaults(func=cmd_fetch)
 
-    # save
-    p_save = sub.add_parser("save", help="Save a finding (JSON on stdin) to the DB")
-    p_save.add_argument("--threshold", type=float, default=0.78,
-                        help="Cosine sim threshold for cluster join")
+    p_save = sub.add_parser("save", help="Append a finding (JSON on stdin)")
     p_save.set_defaults(func=cmd_save)
 
-    # export
-    p_export = sub.add_parser("export", help="Dump research.db as JSON for the dashboard")
+    p_export = sub.add_parser("export", help="Dump findings.jsonl as one JSON blob")
     p_export.set_defaults(func=cmd_export)
 
-    # log-session
-    p_log = sub.add_parser("log-session", help="Record a session row in the DB")
-    p_log.add_argument("goal")
-    p_log.add_argument("--saved", type=int, default=0)
-    p_log.add_argument("--digest", default="")
-    p_log.add_argument("--digest-file")
-    p_log.set_defaults(func=cmd_log_session)
+    p_pdf = sub.add_parser("generate-pdf",
+                           help="Render today's findings + digest as a PDF report")
+    p_pdf.add_argument("--out", help=f"Output path; default: {DEFAULT_REPORTS_DIR}/<date>.pdf")
+    p_pdf.add_argument("--digest", help="Digest text inline")
+    p_pdf.add_argument("--digest-file", help="Path to a Markdown digest file")
+    p_pdf.add_argument("--date", help="Override scan date (YYYY-MM-DD); default today")
+    p_pdf.set_defaults(func=cmd_generate_pdf)
 
     args = ap.parse_args()
     return args.func(args)

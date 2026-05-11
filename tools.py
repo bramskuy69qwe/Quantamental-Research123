@@ -365,6 +365,76 @@ def fetch_url(url: str, max_chars: int = 12000) -> dict:
     }
 
 
+TOOL_FUNCS = {
+    "search_arxiv": search_arxiv,
+    "search_github": search_github,
+    "fetch_reddit": fetch_reddit,
+    "fetch_quantocracy": fetch_quantocracy,
+    "fetch_hn": fetch_hn,
+    "fetch_nber": fetch_nber,
+    "search_paperswithcode": search_paperswithcode,
+    "search_semanticscholar": search_semanticscholar,
+    "search_ssrn": search_ssrn,
+    "fetch_url": fetch_url,
+}
+AG_RE = re.compile(r"<[^>]+>")
+_SCRIPT_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_WS_RE = re.compile(r"\s+")
+
+
+def fetch_url(url: str, max_chars: int = 12000) -> dict:
+    """Fetch a URL and extract readable text. Use to deep-dive a lead."""
+    with _client() as c:
+        r = _get_with_retry(c, url)
+    ct = r.headers.get("content-type", "")
+    if "html" not in ct and "xml" not in ct and "text" not in ct:
+        return {"url": url, "content_type": ct, "text": f"<non-text content: {ct}>"}
+    text = _SCRIPT_RE.sub(" ", r.text)
+    text = _TAG_RE.sub(" ", text)
+    text = _WS_RE.sub(" ", text).strip()
+    return {
+        "url": str(r.url),
+        "content_type": ct,
+        "text": text[:max_chars],
+        "truncated": len(text) > max_chars,
+    }
+
+
+
+TOOL_FUNCS = {
+    "search_arxiv": search_arxiv,
+    "search_github": search_github,
+    "fetch_reddit": fetch_reddit,
+    "fetch_quantocracy": fetch_quantocracy,
+    "fetch_hn": fetch_hn,
+    "fetch_nber": fetch_nber,
+    "search_paperswithcode": search_paperswithcode,
+    "search_semanticscholar": search_semanticscholar,
+    "search_ssrn": search_ssrn,
+    "fetch_url": fetch_url,
+}
+AG_RE = re.compile(r"<[^>]+>")
+_SCRIPT_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_WS_RE = re.compile(r"\s+")
+
+
+def fetch_url(url: str, max_chars: int = 12000) -> dict:
+    """Fetch a URL and extract readable text. Use to deep-dive a lead."""
+    with _client() as c:
+        r = _get_with_retry(c, url)
+    ct = r.headers.get("content-type", "")
+    if "html" not in ct and "xml" not in ct and "text" not in ct:
+        return {"url": url, "content_type": ct, "text": f"<non-text content: {ct}>"}
+    text = _SCRIPT_RE.sub(" ", r.text)
+    text = _TAG_RE.sub(" ", text)
+    text = _WS_RE.sub(" ", text).strip()
+    return {
+        "url": str(r.url),
+        "content_type": ct,
+        "text": text[:max_chars],
+        "truncated": len(text) > max_chars,
+    }
+
 
 TOOL_FUNCS = {
     "search_arxiv": search_arxiv,
