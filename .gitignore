@@ -1,0 +1,40 @@
+# Local DB — any SQLite file, plus journal/WAL/shm sidecars
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Secrets / env — match every .env variant, then exception in the example
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+logs/
+*.log
+
+# Local model cache (if pinned here)
+.models/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Digest exports
+digest.md
+digest_*.md
