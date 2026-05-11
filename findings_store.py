@@ -184,11 +184,23 @@ def export_all(store_path: str) -> dict:
         key=lambda x: x["count"], reverse=True,
     )
 
+    # Edge category frequency — the *kind of edge thesis* across the archive.
+    cat_counts: dict[str, int] = {}
+    for f in findings:
+        c = f.get("edge_category")
+        if c:
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+    top_categories = sorted(
+        [{"category": k, "count": v} for k, v in cat_counts.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
+
     return {
         "findings": findings,
         "clusters": clusters,
-        "sessions": [],  # not tracked in pure-Cowork mode; digests live in chat
+        "sessions": [],
         "top_authors": top_authors(store_path),
         "top_tags": top_tags,
+        "top_categories": top_categories,
         "generated_at": _now_iso(),
     }

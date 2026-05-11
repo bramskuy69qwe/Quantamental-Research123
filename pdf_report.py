@@ -126,6 +126,11 @@ def render_pdf(findings: list[dict], digest: str, out_path: str,
             f"Replicability: {stars} ({repl}/5)"
         )
         pdf.cell(0, 5, _safe_text(meta), new_x="LMARGIN", new_y="NEXT")
+        if f.get("edge_category"):
+            pdf.set_font("helvetica", "B", 10)
+            pdf.cell(0, 5, _safe_text(f"Edge category: {f['edge_category']}"),
+                     new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("helvetica", "", 10)
         if f.get("authors"):
             pdf.cell(0, 5, _safe_text(f"Authors: {f['authors']}"),
                      new_x="LMARGIN", new_y="NEXT")

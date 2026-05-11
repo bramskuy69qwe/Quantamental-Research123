@@ -39,8 +39,8 @@ DEFAULT_STORE = str(HERE / "findings.jsonl")
 DEFAULT_REPORTS_DIR = str(HERE / "reports")
 
 REQUIRED_SAVE_FIELDS = {
-    "url", "source", "title", "summary", "edge_type",
-    "relevance", "replicability", "key_insight",
+    "url", "source", "title", "summary", "edge_type", "edge_category",
+    "relevance", "replicability", "key_insight", "tldr", "eli5",
 }
 
 
@@ -200,6 +200,7 @@ def main():
 
     args = ap.parse_args()
     return args.func(args)
+
 
 
 if __name__ == "__main__":

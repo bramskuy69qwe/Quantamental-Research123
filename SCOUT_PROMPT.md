@@ -37,6 +37,54 @@ Storage is a single `findings.jsonl` in the project folder. **No SQLite, no embe
 
 `tags` — free-form fine-grained tags. Don't overlap with `topic_tags`; use for incidentals.
 
+`edge_category` — **REQUIRED**. The *kind of edge thesis* the finding represents, distinct from `edge_type` (which describes the artifact: model vs classifier). The primary mission of this scout is hunting tradable market edges; `edge_category` is how those edges get organized. Pick exactly one from the vocabulary below.
+
+**Microstructure / orderflow:**
+- `orderflow-imbalance` — OFI, signed volume, bid-ask pressure
+- `volume-profile` — POC migration, value area shifts, volume gaps
+- `closing-auction` — MOC imbalance signals, auction reversion patterns
+- `vpin-toxicity` — informed-flow detection, toxicity gates, adverse-selection
+- `queue-position` — limit-order book queue dynamics, fill probability
+- `volume-anomaly-insider` — unusual volume patterns flagging possible informed flow over time
+
+**Cross-asset / relative value:**
+- `cross-asset-relation` — DXY-EM, oil-CAD, rates-EM equity, FX-vol couplings
+- `lead-lag` — region/timezone spillovers, futures-cash, sector leads
+- `pairs-cointegration` — co-integrated baskets, spread mean reversion
+- `etf-arb` — NAV deviations, creation/redemption flow, sector-ETF dislocations
+
+**Statistical / time-pattern:**
+- `statistical-mispricing` — Z-score reversion, anomaly trading on cross-section
+- `opening-range-breakout` — time-segmented breakout setups (first 30/60 min etc.)
+- `mean-reversion-frequency` — intraday/overnight/weekly periodicity edges
+- `seasonality-calendar` — turn-of-month, FOMC drift, Monday effect, holiday vol
+- `pead-drift` — post-earnings announcement drift, post-event momentum
+- `moc-vs-overnight` — MOC-to-open vs intraday return differentials, overnight risk premium
+
+**Options & vol-specific:**
+- `vol-surface-arb` — skew steepness, term-structure dislocations, smile mispricings
+- `dispersion` — index vs. single-name vol, basket vs. components
+- `variance-risk-premium` — IV-RV gap harvesting, vol-of-vol regimes
+- `dealer-gamma` — GEX positioning, 0DTE flows, dealer-hedging impact on spot
+
+**Forced / structural flow** (high-conviction edge family — these are mechanical, not behavioral):
+- `forced-hedge-rebal` — delta-hedging-driven buying, monthly rebal flows, OPEX gamma unwinds
+- `short-interest-squeeze` — utilization spikes, days-to-cover, locate-rate signals
+- `term-structure-roll` — futures contango/backwardation harvesting, roll yield
+
+**Macro / regime-conditional:**
+- `factor-timing` — value/momentum/quality activation by macro regime
+- `macro-surprise` — release-vs-consensus reactions, asymmetric drift after data
+
+**Alt / info-driven:**
+- `sentiment-flow` — news sentiment, social momentum, options skew as fear gauge
+- `insider-13f` — 13F filings, insider transactions, smart-money positioning
+- `alt-data-alpha` — satellite, app downloads, foot traffic, web scraping
+
+**Crypto-specific:**
+- `funding-basis` — perp funding, futures basis, cash-and-carry decay
+- `on-chain-flow` — whale movements, exchange flows, derivatives positioning
+
 ## What counts as a finding worth saving
 
 - A novel factor, signal, or anomaly with empirical support and a clear mechanism
@@ -53,6 +101,8 @@ Storage is a single `findings.jsonl` in the project folder. **No SQLite, no embe
 - Closed-source signals you can't reason about
 
 ## Workflow
+
+**Hard rule for every session: ≥5 distinct `edge_category` values.** The scout's mission is finding tradable edges, not collecting papers. If a generic source sweep doesn't surface findings across 5 different categories, you have not done the job — run targeted searches aimed at the gaps. Example targeted queries: `"opening range breakout SPY intraday"`, `"dealer gamma 0DTE flows"`, `"forced rebalancing month-end equity"`, `"13F smart money tracking signal"`, `"perpetual funding basis arbitrage"`. Spread across families (don't stack 5 microstructure ones); breadth across families is the point.
 
 **1. Plan 4-7 targeted queries.** A reasonable default sweep:
 
@@ -104,6 +154,7 @@ echo '{
   "published": "2024-03-15",
   "summary": "1-3 sentences capturing the substance.",
   "edge_type": "regime_classifier",
+  "edge_category": "vol-surface-arb",
   "relevance": 0.78,
   "replicability": 4,
   "key_insight": "Single most important takeaway in one sentence.",
@@ -112,7 +163,7 @@ echo '{
 }' | python cowork_scout.py save
 ```
 
-Required fields: `url`, `source`, `title`, `summary`, `edge_type`, `relevance`, `replicability`, `key_insight`, `tldr`, `eli5`. Optional: `authors`, `published`, `tags`, `topic_tags` (recommended).
+Required fields: `url`, `source`, `title`, `summary`, `edge_type`, `edge_category`, `relevance`, `replicability`, `key_insight`, `tldr`, `eli5`. Optional: `authors`, `published`, `tags`, `topic_tags` (recommended).
 
 **`tldr` and `eli5` are now required.** The output of each scan is a PDF report; there is no on-demand summarization layer. Write both inline at save time, in your own voice:
 - `tldr` — one sentence, plain English, no jargon. Captures the substance.
