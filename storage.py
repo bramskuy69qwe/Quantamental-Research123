@@ -335,6 +335,3 @@ def nearest_neighbors(conn: sqlite3.Connection, embedding: bytes,
         })
     scored.sort(key=lambda x: x["similarity"], reverse=True)
     return scored[:k]
-        })
-    scored.sort(key=lambda x: x["similarity"], reverse=True)
-    return scored[:k]

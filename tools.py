@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-HTTP_TIMEOUT = 30.0
+HTTP_TIMEOUT = 60.0
 USER_AGENT = "quant-research-agent/0.1 (research; contact via github)"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
@@ -68,7 +68,7 @@ def search_arxiv(query: str, max_results: int = 20, days_back: int = 14) -> list
         "max_results": str(max_results),
     }
     with _client() as c:
-        r = _get_with_retry(c, "http://export.arxiv.org/api/query", params=params)
+        r = _get_with_retry(c, "https://export.arxiv.org/api/query", params=params)
     feed = feedparser.parse(r.text)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     out = []
@@ -182,12 +182,28 @@ def fetch_hn(query: str, days_back: int = 30) -> list[dict]:
 # ---------- NBER (working papers) ----------
 
 def fetch_nber(days_back: int = 30) -> list[dict]:
-    """NBER working papers via RSS. Strong for macro / labor / monetary research."""
-    with _client() as c:
-        try:
-            r = _get_with_retry(c, "https://www.nber.org/papers/rss")
-        except Exception as e:
-            return [{"error": f"NBER feed unavailable: {e}"}]
+    """NBER working papers via RSS. Strong for macro / labor / monetary research.
+
+    NBER has moved their feed URL around historically; we try a small list and
+    use whichever responds. Update _NBER_FEEDS if all fail in production.
+    """
+    _NBER_FEEDS = [
+        "https://www.nber.org/api/v1/working_papers/rss",
+        "https://www.nber.org/rss/new.xml",
+        "https://www.nber.org/papers/rss",
+    ]
+    r = None
+    last_err = None
+    for url in _NBER_FEEDS:
+        with _client() as c:
+            try:
+                r = _get_with_retry(c, url)
+                break
+            except Exception as e:
+                last_err = e
+                continue
+    if r is None:
+        return [{"error": f"NBER feed unavailable (tried {len(_NBER_FEEDS)} URLs): {last_err}"}]
     feed = feedparser.parse(r.text)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     out = []
@@ -213,13 +229,23 @@ def fetch_nber(days_back: int = 30) -> list[dict]:
 def search_paperswithcode(query: str, max_results: int = 20) -> list[dict]:
     """Search Papers With Code — papers paired with open-source implementations.
     Strong for tradable ML methods where you want code, not just a paper."""
+    # PWC's /api/v1/search/ endpoint has been serving HTML rather than JSON.
+    # The /papers/ endpoint with q= still returns JSON in our testing.
     params = {"q": query, "items_per_page": max_results}
+    headers = {"Accept": "application/json"}
     with _client() as c:
         try:
-            r = _get_with_retry(c, "https://paperswithcode.com/api/v1/search/", params=params)
+            r = _get_with_retry(
+                c, "https://paperswithcode.com/api/v1/papers/",
+                params=params, headers=headers,
+            )
         except Exception as e:
             return [{"error": f"Papers With Code unavailable: {e}"}]
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        snippet = r.text[:200].replace("\n", " ")
+        return [{"error": f"Papers With Code returned non-JSON (HTTP {r.status_code}): {snippet}"}]
     out = []
     for item in data.get("results", []):
         p = item.get("paper") or {}
@@ -295,8 +321,12 @@ def search_ssrn(query: str, max_results: int = 20) -> list[dict]:
     papers with an SSRN ID. Trade-off: SSRN-only papers without S2 indexing are
     missed; everything returned is verifiably on SSRN.
     """
-    # Fetch a wider pool, filter down to those with an SSRN externalId.
-    raw = search_semanticscholar(query, max_results=min(max_results * 4, 100))
+    # Pre-sleep to space requests when the agent calls semanticscholar
+    # and ssrn back-to-back — S2's anonymous tier is strict on rate (often
+    # tighter than their published "100 / 5min" suggests).
+    time.sleep(4.0)
+    # Fetch a moderate over-sample (2x), not 4x — 4x was tripping S2 rate limits.
+    raw = search_semanticscholar(query, max_results=min(max_results * 2, 50))
     ssrn = []
     for r in raw:
         if r.get("error"):

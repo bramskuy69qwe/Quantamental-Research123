@@ -86,7 +86,9 @@ def test_sources():
         ("ssrn",            ["search", "ssrn", "factor investing", "--max", "2"]),
     ]
     for name, args in cases:
-        rc, out = run_scout(*args, timeout=40)
+        # arxiv can be slow; allow the retry chain to finish before timing out.
+        timeout = 90 if name in ("arxiv",) else 45
+        rc, out = run_scout(*args, timeout=timeout)
         if rc != 0:
             bad(f"{name}: {out}")
             continue
@@ -260,7 +262,6 @@ def main() -> int:
     else:
         print("  (skipping downstream tests because save failed)")
 
-    print(f"\n=== Result: {PASS} pass, {FAIL} fail, {SKIP} skipped ===")
     if DB.exists() and FAIL == 0:
         DB.unlink()  # tidy up
     return 0 if FAIL == 0 else 1

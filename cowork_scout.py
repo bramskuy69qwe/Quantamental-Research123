@@ -30,6 +30,13 @@ import json
 import sys
 from pathlib import Path
 
+# Force UTF-8 on stdout so Windows cp1252 doesn't choke on Unicode (e.g. the
+# 'minus sign' character U+2212 that shows up in academic paper titles).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # Make imports work no matter where the script is invoked from.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
